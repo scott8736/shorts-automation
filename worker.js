@@ -410,6 +410,21 @@ export default {
       return new Response(FORM_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
+    if (url.pathname === "/debug-region" && request.method === "GET") {
+      return new Response(
+        JSON.stringify(
+          {
+            colo: request.cf?.colo || "(알수없음)",
+            country: request.cf?.country || "(알수없음)",
+            city: request.cf?.city || "(알수없음)",
+          },
+          null,
+          2
+        ),
+        { headers: { "Content-Type": "application/json; charset=utf-8" } }
+      );
+    }
+
     if (url.pathname === "/debug-env" && request.method === "GET") {
       const status = {
         YOUTUBE_API_KEYS: !!env.YOUTUBE_API_KEYS,
