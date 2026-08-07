@@ -1,0 +1,7 @@
+name = "shorts-automation"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 환경변수(YOUTUBE_API_KEYS, GEMINI_API_KEY, NOTION_TOKEN, NOTION_DATABASE_ID)는
+# 이 파일에 넣지 않습니다. 보안을 위해 Cloudflare 대시보드의
+# Settings > Variables and Secrets 에서 직접 등록하세요.
