@@ -2,6 +2,12 @@ name = "shorts-automation"
 main = "worker.js"
 compatibility_date = "2026-01-01"
 
+# Smart Placement를 명시적으로 끕니다.
+# 켜져 있으면 Cloudflare가 백엔드(Google API)와 가까운 곳으로 실행 위치를 옮기는데,
+# 이 과정에서 Gemini API가 막힌 지역으로 이동할 수 있어 "User location is not supported" 에러가 납니다.
+[placement]
+mode = "off"
+
 # 환경변수(YOUTUBE_API_KEYS, GEMINI_API_KEY, NOTION_TOKEN, NOTION_DATABASE_ID)는
 # 이 파일에 넣지 않습니다. 보안을 위해 Cloudflare 대시보드의
 # Settings > Variables and Secrets 에서 직접 등록하세요.
