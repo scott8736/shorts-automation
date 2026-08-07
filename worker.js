@@ -288,6 +288,15 @@ async function uploadToNotion({ songTitle, artist, youtubeUrl, content }, notion
 // ---------- 파이프라인 ----------
 
 async function runPipeline({ youtubeUrl }, env) {
+  const requiredVars = ["YOUTUBE_API_KEYS", "GEMINI_API_KEY", "NOTION_TOKEN", "NOTION_DATABASE_ID"];
+  const missing = requiredVars.filter((v) => !env[v]);
+  if (missing.length > 0) {
+    throw new Error(
+      `환경변수가 설정되지 않았습니다: ${missing.join(", ")}\n` +
+      `Cloudflare 대시보드 > Settings > Variables and Secrets 에서 확인해주세요.`
+    );
+  }
+
   let metadata = null;
   let comments = [];
   try {
