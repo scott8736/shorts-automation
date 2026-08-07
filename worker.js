@@ -135,9 +135,9 @@ async function getTopComments(url, apiKeysCsv, maxResults = 30) {
   }
 }
 
-// ---------- Gemini ----------
+// ---------- OpenAI ----------
 
-async function geminiExtractSongInfo(metadata, comments, apiKey) {
+async function openaiExtractSongInfo(metadata, comments, apiKey) {
   const commentSample = (comments || [])
     .slice(0, 15)
     .map((c) => `- ${c.text.slice(0, 100)}`)
@@ -156,57 +156,67 @@ async function geminiExtractSongInfo(metadata, comments, apiKey) {
 
 인기 댓글:
 ${commentSample || "(댓글 없음)"}
-
-반드시 아래 JSON 형식으로만 응답하세요:
-{
-  "song_title": "곡명 (확실하지 않으면 영상 제목에서 추정)",
-  "artist": "가수명 (확실하지 않으면 채널명이나 영상 정보에서 추정)",
-  "key_point": "핵심 포인트를 한두 문장으로"
-}
 `;
 
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    }
-  );
-  if (!resp.ok) throw new Error(`Gemini 정보 추출 에러: ${await resp.text()}`);
-  const data = await resp.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini가 빈 응답을 반환했습니다 (정보 추출 단계).");
-  return JSON.parse(text);
-}
-
-async function geminiSearchTrend(artist, songTitle, apiKey) {
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: `'${artist} ${songTitle}' 관련 최신 반응, 화제성, 관련 이슈를 검색해서 요약해줘.` },
-            ],
+  const resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      input: prompt,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "song_info",
+          schema: {
+            type: "object",
+            properties: {
+              song_title: { type: "string" },
+              artist: { type: "string" },
+              key_point: { type: "string" },
+            },
+            required: ["song_title", "artist", "key_point"],
+            additionalProperties: false,
           },
-        ],
-        tools: [{ google_search: {} }],
-      }),
-    }
-  );
-  if (!resp.ok) throw new Error(`Gemini 검색 에러: ${await resp.text()}`);
+          strict: true,
+        },
+      },
+    }),
+  });
+  if (!resp.ok) throw new Error(`OpenAI 정보 추출 에러: ${await resp.text()}`);
   const data = await resp.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  return JSON.parse(extractOutputText(data));
 }
 
-async function geminiGenerateContent({ songTitle, artist, keyPoint, metadata, comments, trendSummary }, apiKey) {
+function extractOutputText(responseJson) {
+  const messageItem = (responseJson.output || []).find((item) => item.type === "message");
+  const textPart = messageItem?.content?.find((c) => c.type === "output_text");
+  if (!textPart?.text) throw new Error("OpenAI가 빈 응답을 반환했습니다.");
+  return textPart.text;
+}
+
+async function openaiSearchTrend(artist, songTitle, apiKey) {
+  const resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-5.4",
+      tools: [{ type: "web_search" }],
+      input: `'${artist} ${songTitle}' 관련 최신 반응, 화제성, 관련 이슈를 검색해서 요약해줘.`,
+    }),
+  });
+  if (!resp.ok) throw new Error(`OpenAI 검색 에러: ${await resp.text()}`);
+  const data = await resp.json();
+  return extractOutputText(data);
+}
+
+async function openaiGenerateContent({ songTitle, artist, keyPoint, metadata, comments, trendSummary }, apiKey) {
   const contextParts = [
     `곡명: ${songTitle}`,
     `가수: ${artist}`,
@@ -223,22 +233,45 @@ async function geminiGenerateContent({ songTitle, artist, keyPoint, metadata, co
 
   const prompt = `${MANUAL_SYSTEM_PROMPT}\n\n[트렌드 조사 결과]\n${trendSummary}\n\n[콘텐츠 정보]\n${contextParts.join("\n")}`;
 
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" },
-      }),
-    }
-  );
-  if (!resp.ok) throw new Error(`Gemini 생성 에러: ${await resp.text()}`);
+  const resp = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      input: prompt,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "shorts_content",
+          schema: {
+            type: "object",
+            properties: {
+              "기획_유형": { type: "string" },
+              "제목안": { type: "string" },
+              "썸네일_가이드": { type: "string" },
+              "대본_가이드": { type: "string" },
+              "TTS_가이드": { type: "string" },
+              "설명": { type: "string" },
+              "해시태그": { type: "string" },
+              "트렌드_분석_요약": { type: "string" },
+            },
+            required: [
+              "기획_유형", "제목안", "썸네일_가이드", "대본_가이드",
+              "TTS_가이드", "설명", "해시태그", "트렌드_분석_요약",
+            ],
+            additionalProperties: false,
+          },
+          strict: true,
+        },
+      },
+    }),
+  });
+  if (!resp.ok) throw new Error(`OpenAI 생성 에러: ${await resp.text()}`);
   const data = await resp.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini가 빈 응답을 반환했습니다.");
-  return JSON.parse(text);
+  return JSON.parse(extractOutputText(data));
 }
 
 // ---------- Notion ----------
@@ -288,7 +321,7 @@ async function uploadToNotion({ songTitle, artist, youtubeUrl, content }, notion
 // ---------- 파이프라인 ----------
 
 async function runPipeline({ youtubeUrl }, env) {
-  const requiredVars = ["YOUTUBE_API_KEYS", "GEMINI_API_KEY", "NOTION_TOKEN", "NOTION_DATABASE_ID"];
+  const requiredVars = ["YOUTUBE_API_KEYS", "OPENAI_API_KEY", "NOTION_TOKEN", "NOTION_DATABASE_ID"];
   const missing = requiredVars.filter((v) => !env[v]);
   if (missing.length > 0) {
     throw new Error(
@@ -310,16 +343,16 @@ async function runPipeline({ youtubeUrl }, env) {
   }
 
   // 1단계: 영상 정보에서 곡명/가수/핵심포인트 자동 추출
-  const extracted = await geminiExtractSongInfo(metadata, comments, env.GEMINI_API_KEY);
+  const extracted = await openaiExtractSongInfo(metadata, comments, env.OPENAI_API_KEY);
   const songTitle = extracted.song_title;
   const artist = extracted.artist;
   const keyPoint = extracted.key_point;
 
-  const trendSummary = await geminiSearchTrend(artist, songTitle, env.GEMINI_API_KEY);
+  const trendSummary = await openaiSearchTrend(artist, songTitle, env.OPENAI_API_KEY);
 
-  const content = await geminiGenerateContent(
+  const content = await openaiGenerateContent(
     { songTitle, artist, keyPoint, metadata, comments, trendSummary },
-    env.GEMINI_API_KEY
+    env.OPENAI_API_KEY
   );
 
   const uploadResult = await uploadToNotion(
@@ -428,7 +461,7 @@ export default {
     if (url.pathname === "/debug-env" && request.method === "GET") {
       const status = {
         YOUTUBE_API_KEYS: !!env.YOUTUBE_API_KEYS,
-        GEMINI_API_KEY: !!env.GEMINI_API_KEY,
+        OPENAI_API_KEY: !!env.OPENAI_API_KEY,
         NOTION_TOKEN: !!env.NOTION_TOKEN,
         NOTION_DATABASE_ID: !!env.NOTION_DATABASE_ID,
       };
