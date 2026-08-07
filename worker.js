@@ -410,6 +410,24 @@ export default {
       return new Response(FORM_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
 
+    if (url.pathname === "/debug-env" && request.method === "GET") {
+      const status = {
+        YOUTUBE_API_KEYS: !!env.YOUTUBE_API_KEYS,
+        GEMINI_API_KEY: !!env.GEMINI_API_KEY,
+        NOTION_TOKEN: !!env.NOTION_TOKEN,
+        NOTION_DATABASE_ID: !!env.NOTION_DATABASE_ID,
+      };
+      // 값의 앞 4글자만 살짝 보여줘서 "다른 값이 들어간 건 아닌지"도 확인 가능하게
+      const preview = {};
+      for (const key of Object.keys(status)) {
+        preview[key] = env[key] ? String(env[key]).slice(0, 4) + "..." : "(없음)";
+      }
+      return new Response(
+        JSON.stringify({ 존재여부: status, 앞부분미리보기: preview }, null, 2),
+        { headers: { "Content-Type": "application/json; charset=utf-8" } }
+      );
+    }
+
     if (url.pathname === "/generate" && request.method === "POST") {
       try {
         const body = await request.json();
