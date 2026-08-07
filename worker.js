@@ -137,6 +137,52 @@ async function getTopComments(url, apiKeysCsv, maxResults = 30) {
 
 // ---------- Gemini ----------
 
+async function geminiExtractSongInfo(metadata, comments, apiKey) {
+  const commentSample = (comments || [])
+    .slice(0, 15)
+    .map((c) => `- ${c.text.slice(0, 100)}`)
+    .join("\n");
+
+  const prompt = `
+다음은 유튜브 영상의 메타데이터와 인기 댓글입니다. 이 정보를 바탕으로:
+1. 이 영상에서 다뤄지는 곡명
+2. 부른 가수명
+3. 이 영상의 핵심 포인트(반전 지점, 화제가 된 이유, 서사 등 - 댓글 반응에서 유추)
+를 추출해주세요.
+
+영상 제목: ${metadata?.title || "(정보 없음)"}
+영상 설명: ${(metadata?.description || "").slice(0, 500)}
+채널명: ${metadata?.channel_title || "(정보 없음)"}
+
+인기 댓글:
+${commentSample || "(댓글 없음)"}
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "song_title": "곡명 (확실하지 않으면 영상 제목에서 추정)",
+  "artist": "가수명 (확실하지 않으면 채널명이나 영상 정보에서 추정)",
+  "key_point": "핵심 포인트를 한두 문장으로"
+}
+`;
+
+  const resp = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" },
+      }),
+    }
+  );
+  if (!resp.ok) throw new Error(`Gemini 정보 추출 에러: ${await resp.text()}`);
+  const data = await resp.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Gemini가 빈 응답을 반환했습니다 (정보 추출 단계).");
+  return JSON.parse(text);
+}
+
 async function geminiSearchTrend(artist, songTitle, apiKey) {
   const resp = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
@@ -241,15 +287,24 @@ async function uploadToNotion({ songTitle, artist, youtubeUrl, content }, notion
 
 // ---------- 파이프라인 ----------
 
-async function runPipeline({ youtubeUrl, songTitle, artist, keyPoint }, env) {
+async function runPipeline({ youtubeUrl }, env) {
   let metadata = null;
   let comments = [];
   try {
     metadata = await getVideoMetadata(youtubeUrl, env.YOUTUBE_API_KEYS);
     comments = await getTopComments(youtubeUrl, env.YOUTUBE_API_KEYS);
   } catch (e) {
-    // 메타데이터 수집 실패해도 곡명/가수/핵심포인트만으로 진행
+    throw new Error(
+      `유튜브 영상 정보를 가져오지 못했습니다: ${e.message}\n` +
+      `(비공개/삭제/연령제한 영상이거나 YouTube API 키 문제일 수 있습니다)`
+    );
   }
+
+  // 1단계: 영상 정보에서 곡명/가수/핵심포인트 자동 추출
+  const extracted = await geminiExtractSongInfo(metadata, comments, env.GEMINI_API_KEY);
+  const songTitle = extracted.song_title;
+  const artist = extracted.artist;
+  const keyPoint = extracted.key_point;
 
   const trendSummary = await geminiSearchTrend(artist, songTitle, env.GEMINI_API_KEY);
 
@@ -264,7 +319,7 @@ async function runPipeline({ youtubeUrl, songTitle, artist, keyPoint }, env) {
     env.NOTION_DATABASE_ID
   );
 
-  return { notionUrl: uploadResult.page_url, content };
+  return { notionUrl: uploadResult.page_url, content, songTitle, artist };
 }
 
 // ---------- 웹 폼 HTML ----------
@@ -287,18 +342,10 @@ const FORM_HTML = `
 </head>
 <body>
   <h1>노래 쇼츠 기획 자동화</h1>
+  <p style="color:#666; font-size:14px;">유튜브 링크만 넣으면 곡명/가수/핵심포인트를 자동으로 분석합니다.</p>
   <form id="genForm">
     <label>유튜브 링크</label>
     <input type="url" id="youtube_url" required placeholder="https://www.youtube.com/shorts/...">
-
-    <label>곡명</label>
-    <input type="text" id="song_title" required>
-
-    <label>가수명</label>
-    <input type="text" id="artist" required>
-
-    <label>핵심 포인트</label>
-    <textarea id="key_point" rows="3" required placeholder="예: 먹방 예능에 우연히 등장, 본인이 대표곡을 부름"></textarea>
 
     <button type="submit">기획 생성 + Notion 업로드</button>
   </form>
@@ -313,9 +360,6 @@ document.getElementById('genForm').addEventListener('submit', async (e) => {
 
   const body = {
     youtube_url: document.getElementById('youtube_url').value,
-    song_title: document.getElementById('song_title').value,
-    artist: document.getElementById('artist').value,
-    key_point: document.getElementById('key_point').value,
   };
 
   try {
@@ -331,7 +375,9 @@ document.getElementById('genForm').addEventListener('submit', async (e) => {
     if (data.error) {
       resultDiv.innerHTML = '<h3>❌ 에러</h3><p style="color:red;">' + data.error + '</p>';
     } else {
-      resultDiv.innerHTML = '<h3>✅ 완료</h3><p><a href="' + data.notionUrl + '" target="_blank">Notion에서 결과 확인하기</a></p>';
+      resultDiv.innerHTML = '<h3>✅ 완료</h3>' +
+        '<p>인식된 정보: ' + data.artist + ' - ' + data.songTitle + '</p>' +
+        '<p><a href="' + data.notionUrl + '" target="_blank">Notion에서 결과 확인하기</a></p>';
     }
   } catch (err) {
     document.getElementById('loading').style.display = 'none';
@@ -358,18 +404,15 @@ export default {
     if (url.pathname === "/generate" && request.method === "POST") {
       try {
         const body = await request.json();
-        const result = await runPipeline(
-          {
-            youtubeUrl: body.youtube_url,
-            songTitle: body.song_title,
-            artist: body.artist,
-            keyPoint: body.key_point,
-          },
-          env
+        const result = await runPipeline({ youtubeUrl: body.youtube_url }, env);
+        return new Response(
+          JSON.stringify({
+            notionUrl: result.notionUrl,
+            songTitle: result.songTitle,
+            artist: result.artist,
+          }),
+          { headers: { "Content-Type": "application/json" } }
         );
-        return new Response(JSON.stringify({ notionUrl: result.notionUrl }), {
-          headers: { "Content-Type": "application/json" },
-        });
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), {
           status: 500,
